@@ -128,6 +128,11 @@ pub struct Args {
     /// By default, we use 14 of these and leave 2 threads to service other requests.
     #[arg(long, default_value_t = 14)]
     pub num_threads: usize,
+
+    /// Only sync blocks starting from this height (inclusive). Blocks below this height are skipped.
+    /// Useful for testing database or stats changes without doing a full sync.
+    #[arg(long)]
+    pub start_height: Option<u64>,
 }
 
 pub fn collect_statistics(
@@ -135,6 +140,7 @@ pub fn collect_statistics(
     rest_port: u16,
     connection: Arc<Mutex<SqliteConnection>>,
     num_threads: usize,
+    start_height: Option<u64>,
 ) -> Result<(), MainError> {
     let connection = Arc::clone(&connection);
 
@@ -170,8 +176,9 @@ pub fn collect_statistics(
             .collect()
     };
     // 4. Filter out heights that are already up-to-date from all possible heights
-    //    we could fetch.
-    let heights_to_fetch: Vec<i64> = (0..fetch_height as i64)
+    //    we could fetch. If start_height is set, skip blocks below it.
+    let start = start_height.unwrap_or(0) as i64;
+    let heights_to_fetch: Vec<i64> = (start..fetch_height as i64)
         .filter(|h| !uptodate_heights.contains(h))
         .collect();
 

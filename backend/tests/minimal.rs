@@ -90,6 +90,7 @@ fn test_integration_minimal() {
         rest_port,
         Arc::clone(&conn),
         10, // Bitcoin Core v29 has 16, in the test use just use 10 of them.
+        None,
     ) {
         panic!("Failed to collect statistics: {:?}", e);
     }

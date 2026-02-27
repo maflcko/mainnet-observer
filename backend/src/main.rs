@@ -32,6 +32,7 @@ fn main() {
             args.rest_port,
             Arc::clone(&conn),
             args.num_threads,
+            args.start_height,
         ) {
             error!("Could not collect statistics: {}", e);
             exit(1);
