@@ -27,7 +27,8 @@ const P2A_DUST_THRESHOLD: u64 = 240;
 // version 1: initial version
 // version 2: add coinbase locktime stats
 // version 3: add coinbase output stats
-pub const STATS_VERSION: i32 = 3;
+// version 4: add UTXO spend age stats
+pub const STATS_VERSION: i32 = 4;
 
 #[derive(Debug)]
 pub enum StatsError {
@@ -652,6 +653,11 @@ pub struct InputStats {
     inputs_unknown: i32,
 
     inputs_spend_in_same_block: i32,
+
+    inputs_spending_prev_1_blocks: i32,
+    inputs_spending_prev_6_blocks: i32,
+    inputs_spending_prev_144_blocks: i32,
+    inputs_spending_prev_2016_blocks: i32,
 }
 
 impl InputStats {
@@ -713,7 +719,9 @@ impl InputStats {
                 let InputData::NonCoinbase { txid, prevout, .. } = &input.data else {
                     continue;
                 };
-                if txids_in_this_block.contains(txid) {
+                // prevout.height=0 for same-block UTXOs, so use the txid check to detect age=0.
+                let is_same_block = txids_in_this_block.contains(txid);
+                if is_same_block {
                     s.inputs_spend_in_same_block += 1;
                 }
 
@@ -724,6 +732,24 @@ impl InputStats {
                     if prevout.value < bitcoin::Amount::from_sat(P2A_DUST_THRESHOLD) {
                         s.inputs_p2a_dust += 1;
                     }
+                }
+
+                let confirmation_age = if is_same_block {
+                    0
+                } else {
+                    height - prevout.height
+                };
+                if confirmation_age <= 1 {
+                    s.inputs_spending_prev_1_blocks += 1;
+                }
+                if confirmation_age <= 6 {
+                    s.inputs_spending_prev_6_blocks += 1;
+                }
+                if confirmation_age <= 144 {
+                    s.inputs_spending_prev_144_blocks += 1;
+                }
+                if confirmation_age <= 2016 {
+                    s.inputs_spending_prev_2016_blocks += 1;
                 }
             }
         }
@@ -1362,6 +1388,10 @@ mod tests {
                 inputs_p2a_dust: 0,
                 inputs_unknown: 0,
                 inputs_spend_in_same_block: 9,
+                inputs_spending_prev_1_blocks: 15,
+                inputs_spending_prev_6_blocks: 43,
+                inputs_spending_prev_144_blocks: 43,
+                inputs_spending_prev_2016_blocks: 17060,
             },
             output: OutputStats {
                 height: 888395,
@@ -1614,6 +1644,10 @@ mod tests {
                 inputs_p2a_dust: 0,
                 inputs_unknown: 0,
                 inputs_spend_in_same_block: 110,
+                inputs_spending_prev_1_blocks: 683,
+                inputs_spending_prev_6_blocks: 818,
+                inputs_spending_prev_144_blocks: 1557,
+                inputs_spending_prev_2016_blocks: 2053,
             },
             output: OutputStats {
                 height: 739990,
@@ -1866,6 +1900,10 @@ mod tests {
                 inputs_p2a_dust: 0,
                 inputs_unknown: 0,
                 inputs_spend_in_same_block: 52,
+                inputs_spending_prev_1_blocks: 158,
+                inputs_spending_prev_6_blocks: 229,
+                inputs_spending_prev_144_blocks: 426,
+                inputs_spending_prev_2016_blocks: 654,
             },
             output: OutputStats {
                 height: 361582,

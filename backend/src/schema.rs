@@ -130,6 +130,10 @@ diesel::table! {
         inputs_spend_in_same_block -> Integer,
         inputs_p2a -> Integer,
         inputs_p2a_dust -> Integer,
+        inputs_spending_prev_1_blocks -> Integer,
+        inputs_spending_prev_6_blocks -> Integer,
+        inputs_spending_prev_144_blocks -> Integer,
+        inputs_spending_prev_2016_blocks -> Integer,
     }
 }
 
