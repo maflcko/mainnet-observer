@@ -334,6 +334,7 @@ pub fn write_csv_files(
     csv_path: &str,
     connection: Arc<Mutex<SqliteConnection>>,
 ) -> Result<(), MainError> {
+    std::fs::create_dir_all(csv_path)?;
     gen_csv::date_csv(csv_path, connection.clone())?;
     gen_csv::metrics_csv(csv_path, connection.clone())?;
     gen_csv::top5_miningpools_csv(csv_path, connection.clone())?;
