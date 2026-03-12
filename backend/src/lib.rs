@@ -369,17 +369,21 @@ pub fn collect_statistics(
         Ok(())
     });
 
-    get_blocks_task
+    // Join all tasks before returning, even if one errored, to avoid
+    // leaving detached threads with in-flight DB writes.
+    let get_blocks_result = get_blocks_task
         .join()
-        .expect("The get-blocks task thread panicked")?;
-    calc_stats_task
+        .expect("The get-blocks task thread panicked");
+    let calc_stats_result = calc_stats_task
         .join()
-        .expect("The calc-stats task thread panicked")?;
-    batch_insert_task
+        .expect("The calc-stats task thread panicked");
+    let batch_insert_result = batch_insert_task
         .join()
-        .expect("The batch-insert task thread panicked")?;
+        .expect("The batch-insert task thread panicked");
 
-    Ok(())
+    get_blocks_result?;
+    calc_stats_result?;
+    batch_insert_result
 }
 
 pub fn write_csv_files(
