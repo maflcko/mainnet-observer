@@ -13,9 +13,14 @@ use stats::Stats;
 use std::collections::BTreeSet;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use std::{error, fmt, io, thread};
 
 const DATABASE_BATCH_SIZE: usize = 100;
+
+// Retry configuration for block fetching
+const MAX_RETRY_ATTEMPTS: u32 = 5;
+const INITIAL_RETRY_DELAY_MS: u64 = 500;
 
 // Don't fetch (and process) the most recent blocks to be safe
 // in-case of a reorg.
@@ -209,10 +214,36 @@ pub fn collect_statistics(
             heights_to_fetch.par_iter()
                 .map(|&height| {
                     debug!("get-blocks: getting block at height {}", height);
-                    let block = match client.block_at_height(height as u64) {
-                        Ok(block) => block,
-                        Err(e) => {
-                            error!("Could not get block at height {}: {}", height, e);
+
+                    // Retry loop with exponential backoff
+                    let mut last_error = None;
+                    let block = (1..=MAX_RETRY_ATTEMPTS).find_map(|attempt| {
+                        match client.block_at_height(height as u64) {
+                            Ok(block) => Some(block),
+                            Err(e) => {
+                                if attempt < MAX_RETRY_ATTEMPTS {
+                                    let delay = INITIAL_RETRY_DELAY_MS
+                                        * 2u64.saturating_pow(attempt.saturating_sub(1));
+                                    warn!(
+                                        "Could not get block at height {} (attempt {}/{}): {}. Retrying in {}ms...",
+                                        height, attempt, MAX_RETRY_ATTEMPTS, e, delay
+                                    );
+                                    thread::sleep(Duration::from_millis(delay));
+                                }
+                                last_error = Some(e);
+                                None
+                            }
+                        }
+                    });
+
+                    let block = match block {
+                        Some(b) => b,
+                        None => {
+                            let e = last_error.unwrap();
+                            error!(
+                                "Failed to get block at height {} after {} attempts: {}",
+                                height, MAX_RETRY_ATTEMPTS, e
+                            );
                             return Err(MainError::REST(e));
                         }
                     };
