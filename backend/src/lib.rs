@@ -11,6 +11,7 @@ use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use stats::Stats;
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -210,14 +211,23 @@ pub fn collect_statistics(
             .num_threads(num_threads)
             .build()
             .unwrap();
+        let cancel = AtomicBool::new(false);
         pool.install(|| {
             heights_to_fetch.par_iter()
-                .map(|&height| {
+                .try_for_each(|&height| {
+                    // Fast exit if another thread already failed
+                    if cancel.load(Ordering::Relaxed) {
+                        return Ok(());
+                    }
+
                     debug!("get-blocks: getting block at height {}", height);
 
                     // Retry loop with exponential backoff
                     let mut last_error = None;
                     let block = (1..=MAX_RETRY_ATTEMPTS).find_map(|attempt| {
+                        if cancel.load(Ordering::Relaxed) {
+                            return None;
+                        }
                         match client.block_at_height(height as u64) {
                             Ok(block) => Some(block),
                             Err(e) => {
@@ -239,11 +249,16 @@ pub fn collect_statistics(
                     let block = match block {
                         Some(b) => b,
                         None => {
+                            // Cancelled by another thread's failure
+                            if cancel.load(Ordering::Relaxed) {
+                                return Ok(());
+                            }
                             let e = last_error.unwrap();
                             error!(
                                 "Failed to get block at height {} after {} attempts: {}",
                                 height, MAX_RETRY_ATTEMPTS, e
                             );
+                            cancel.store(true, Ordering::Relaxed);
                             return Err(MainError::REST(e));
                         }
                     };
@@ -252,15 +267,14 @@ pub fn collect_statistics(
                             "during sending block at height {} to stats generator: block receiver dropped",
                             height
                         );
-                        // We can return OK here. When the receiver is dropped, there
-                        // probably was an error in the calc-stats task.
+                        // When the receiver is dropped, there was probably an error
+                        // in the calc-stats task. Stop fetching blocks.
+                        cancel.store(true, Ordering::Relaxed);
                         return Ok(());
                     }
                     Ok(())
                 })
-                .for_each(drop); // Drop the result of the map (since it's already handled)
-        });
-        Ok(())
+        })
     });
 
     // calc-stats task
