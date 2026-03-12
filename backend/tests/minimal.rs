@@ -5,13 +5,18 @@ use mainnet_observer_backend::{collect_statistics, db, write_csv_files, REORG_SA
 use rand::distr::{Alphanumeric, SampleString};
 use std::env;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 fn init_logger() {
-    env_logger::Builder::new()
+    let _ = env_logger::Builder::new()
         .filter_level(log::LevelFilter::Debug)
         .is_test(true)
-        .init();
+        .try_init();
 }
 
 fn setup_node() -> corepc_node::Node {
@@ -74,6 +79,98 @@ fn setup_db() -> Arc<Mutex<SqliteConnection>> {
     Arc::new(Mutex::new(conn))
 }
 
+struct MockRestServer {
+    host: String,
+    port: u16,
+    keep_running: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl MockRestServer {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock rest listener");
+        listener
+            .set_nonblocking(true)
+            .expect("set listener nonblocking");
+        let port = listener.local_addr().expect("read local addr").port();
+        let keep_running = Arc::new(AtomicBool::new(true));
+        let keep_running_thread = Arc::clone(&keep_running);
+
+        let handle = thread::spawn(move || {
+            while keep_running_thread.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _addr)) => handle_connection(&mut stream),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_e) => break,
+                }
+            }
+        });
+
+        Self {
+            host: "127.0.0.1".to_string(),
+            port,
+            keep_running,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for MockRestServer {
+    fn drop(&mut self) {
+        self.keep_running.store(false, Ordering::Relaxed);
+        let _ = TcpStream::connect((self.host.as_str(), self.port));
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn handle_connection(stream: &mut TcpStream) {
+    let mut buffer = [0u8; 4096];
+    let bytes_read = match stream.read(&mut buffer) {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+    if bytes_read == 0 {
+        return;
+    }
+    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+    let path = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("/");
+
+    let (status, body, content_type) = if path == "/rest/chaininfo.json" {
+        (
+            "200 OK",
+            r#"{"initialblockdownload":false,"verificationprogress":1.0,"blocks":8}"#,
+            "application/json",
+        )
+    } else if path.starts_with("/rest/blockhashbyheight/") {
+        (
+            "500 Internal Server Error",
+            r#"{"error":"forced failure"}"#,
+            "application/json",
+        )
+    } else {
+        (
+            "404 Not Found",
+            r#"{"error":"not found"}"#,
+            "application/json",
+        )
+    };
+
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.flush();
+}
+
 #[test]
 fn test_integration_minimal() {
     const BLOCKS_TO_MINE: i64 = 100;
@@ -123,4 +220,23 @@ fn test_integration_minimal() {
     // cleanup
     fs::remove_dir_all(&dir).unwrap();
     assert!(!failed);
+}
+
+#[test]
+fn test_collect_statistics_fails_on_block_fetch_retry_exhaustion() {
+    init_logger();
+    let conn = setup_db();
+    let mock = MockRestServer::start();
+
+    let result = collect_statistics(&mock.host, mock.port, Arc::clone(&conn), 2, None);
+
+    match result {
+        Err(mainnet_observer_backend::MainError::REST(e)) => {
+            assert!(
+                e.to_string().contains("HTTP error: 500"),
+                "expected HTTP 500 from mock REST server, got: {e}"
+            );
+        }
+        other => panic!("expected HTTP REST error after retry exhaustion, got: {other:?}"),
+    }
 }
