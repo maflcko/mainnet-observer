@@ -9,7 +9,7 @@ aliases:
   - /charts/transactions-1out/
 categories: Transactions
 position: 7
-tags: [Input-Output-Count, Distribution, stacked]
+tags: [Input-Output-Count, Privacy, Distribution, stacked]
 thumbnail: transactions-input-output-distribution.png
 chartJS: transactions-input-output-distribution.js
 images:
@@ -22,11 +22,10 @@ Shows how Bitcoin transactions are distributed across common input and output co
 The stacked chart separates one-input-one-output, one-input-two-output, one-input-many-output,
 many-input-one-output, and all other transactions.
 
-Transactions with one input and one output are likely self-transfers.
+Transactions with one input and one output are [likely self-transfers](https://en.bitcoin.it/wiki/Privacy#Exact_payment_amounts_.28no_change.29).
 
 A lot of transactions that pay someone have one input and two outputs.
-The input comes from the payer, one output goes to the payee and the other one
-(likely) goes back to the payer as a change output.
+The input comes from the payer, one output goes to the payee and the other one (likely) goes back to the payer as a change output.
 
 Transactions with one input and many outputs are usually fan-out transactions,
 such as batches or distribution payments.
